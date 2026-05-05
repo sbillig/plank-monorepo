@@ -5,7 +5,17 @@ use plank_source::{
 };
 use plank_values::ValueInterner;
 use sir_passes::PassManager;
-use std::path::{Path, PathBuf};
+use std::{
+    fmt::Display,
+    path::{Path, PathBuf},
+};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BackendKind {
+    #[default]
+    Sir,
+    Sona,
+}
 
 pub struct Driver<'a, F: SourceFs> {
     pub session: Session,
@@ -79,15 +89,55 @@ impl<'a, F: SourceFs> Driver<'a, F> {
         show_sir_in: bool,
         show_sir_last: bool,
     ) -> Vec<u8> {
+        self.emit_bytecode_with_backend(
+            mir,
+            optimizations,
+            disp_needs_separators,
+            show_sir_in,
+            show_sir_last,
+            BackendKind::Sir,
+        )
+        .expect("SIR bytecode emission should not fail")
+    }
+
+    pub fn emit_bytecode_with_backend(
+        &self,
+        mir: &plank_mir::Mir,
+        optimizations: Option<&str>,
+        disp_needs_separators: bool,
+        show_sir_in: bool,
+        show_sir_last: bool,
+        backend: BackendKind,
+    ) -> Result<Vec<u8>, String> {
+        match backend {
+            BackendKind::Sir => Ok(self.emit_sir_bytecode(
+                mir,
+                optimizations,
+                disp_needs_separators,
+                show_sir_in,
+                show_sir_last,
+            )),
+            BackendKind::Sona => self.emit_sona_bytecode(
+                mir,
+                optimizations,
+                disp_needs_separators,
+                show_sir_in,
+                show_sir_last,
+            ),
+        }
+    }
+
+    fn emit_sir_bytecode(
+        &self,
+        mir: &plank_mir::Mir,
+        optimizations: Option<&str>,
+        disp_needs_separators: bool,
+        show_sir_in: bool,
+        show_sir_last: bool,
+    ) -> Vec<u8> {
         let mut program = plank_mir_lower::lower(mir, &self.values);
         if show_sir_in {
-            if disp_needs_separators {
-                eprintln!("\n");
-                eprintln!("////////////////////////////////////////////////////////////////");
-                eprintln!("//                           SIR IN                           //");
-                eprintln!("////////////////////////////////////////////////////////////////");
-            }
-            eprintln!("{}", program);
+            print_backend_ir("SIR IN", disp_needs_separators, &program);
         }
         let mut pass_manager = PassManager::new(&mut program);
         pass_manager.run_ssa_transform();
@@ -95,18 +145,59 @@ impl<'a, F: SourceFs> Driver<'a, F> {
             pass_manager.run_optimizations(passes);
         }
         if show_sir_last {
-            if disp_needs_separators {
-                eprintln!("\n");
-                eprintln!("////////////////////////////////////////////////////////////////");
-                eprintln!("//                          SIR LAST                          //");
-                eprintln!("////////////////////////////////////////////////////////////////");
-            }
-            eprintln!("{}", program);
+            print_backend_ir("SIR LAST", disp_needs_separators, &program);
         }
         let mut bytecode = Vec::with_capacity(0x6000);
         sir_debug_backend::ir_to_bytecode(&program, &mut bytecode);
         bytecode
     }
+
+    fn emit_sona_bytecode(
+        &self,
+        mir: &plank_mir::Mir,
+        optimizations: Option<&str>,
+        disp_needs_separators: bool,
+        show_sir_in: bool,
+        show_sir_last: bool,
+    ) -> Result<Vec<u8>, String> {
+        let opt_level = if optimizations.is_some() {
+            plank_mir_lower_sona::OptLevel::O2
+        } else {
+            plank_mir_lower_sona::OptLevel::O0
+        };
+        if show_sir_in {
+            print_backend_ir(
+                "SONA IR",
+                disp_needs_separators,
+                plank_mir_lower_sona::emit_ir(
+                    mir,
+                    &self.values,
+                    plank_mir_lower_sona::OptLevel::O0,
+                )
+                .map_err(|err| err.to_string())?,
+            );
+        }
+        if show_sir_last {
+            print_backend_ir(
+                "SONA IR OPT",
+                disp_needs_separators,
+                plank_mir_lower_sona::emit_ir(mir, &self.values, opt_level)
+                    .map_err(|err| err.to_string())?,
+            );
+        }
+        plank_mir_lower_sona::emit_bytecode(mir, &self.values, opt_level)
+            .map_err(|err| err.to_string())
+    }
+}
+
+fn print_backend_ir(title: &str, disp_needs_separators: bool, ir: impl Display) {
+    if disp_needs_separators {
+        eprintln!("\n");
+        eprintln!("////////////////////////////////////////////////////////////////");
+        eprintln!("//{title:^60}//");
+        eprintln!("////////////////////////////////////////////////////////////////");
+    }
+    eprintln!("{ir}");
 }
 
 #[cfg(test)]

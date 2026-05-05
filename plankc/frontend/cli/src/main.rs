@@ -3,9 +3,9 @@ use plank_test_utils as _;
 #[cfg(test)]
 use tempfile as _;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use owo_colors::OwoColorize;
-use plank_driver::Driver;
+use plank_driver::{BackendKind, Driver};
 use plank_hir::display::DisplayHir;
 use plank_mir::display::DisplayMir;
 use plank_parser::cst::display::DisplayCST;
@@ -60,15 +60,18 @@ struct BuildArgs {
 
     #[arg(
         long = "show-sir-first",
-        help = "show the SIR going into the middle end (directly after lowering from MIR)"
+        help = "show the selected backend IR before backend optimizations"
     )]
     show_sir_in: bool,
 
-    #[arg(long = "show-sir-final", help = "show the final SIR pre lowering to EVM assembly")]
+    #[arg(long = "show-sir-final", help = "show the selected backend IR before bytecode emission")]
     show_sir_last: bool,
 
     #[arg(short = 'O', long = "optimize", help = OPTIMIZE_HELP, value_parser = parse_optimizations_string)]
     optimize: Option<String>,
+
+    #[arg(long = "backend", value_enum, default_value_t = BackendArg::Sir)]
+    backend: BackendArg,
 
     #[arg(long = "module-name")]
     module_name: Option<String>,
@@ -78,6 +81,21 @@ struct BuildArgs {
 
     #[arg(long = "dep", value_parser = parse_dep)]
     deps: Vec<(String, PathBuf)>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum BackendArg {
+    Sir,
+    Sona,
+}
+
+impl From<BackendArg> for BackendKind {
+    fn from(value: BackendArg) -> Self {
+        match value {
+            BackendArg::Sir => BackendKind::Sir,
+            BackendArg::Sona => BackendKind::Sona,
+        }
+    }
 }
 
 fn parse_dep(s: &str) -> Result<(String, PathBuf), String> {
@@ -226,13 +244,16 @@ fn build(plank_dir: Option<PathBuf>, args: BuildArgs) {
         driver.render_diagnostics_and_exit();
     }
 
-    let bytecode = driver.emit_bytecode(
-        &mir,
-        args.optimize.as_deref(),
-        needs_separators,
-        args.show_sir_in,
-        args.show_sir_last,
-    );
+    let bytecode = driver
+        .emit_bytecode_with_backend(
+            &mir,
+            args.optimize.as_deref(),
+            needs_separators,
+            args.show_sir_in,
+            args.show_sir_last,
+            args.backend.into(),
+        )
+        .unwrap_or_else(|err| cli_error_and_exit(err));
 
     print!("0x");
     for byte in bytecode {
