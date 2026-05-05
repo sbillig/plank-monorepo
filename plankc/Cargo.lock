@@ -2028,6 +2028,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "plank-bytecode-tests"
+version = "0.1.0"
+dependencies = [
+ "plank-driver",
+ "plank-source",
+ "revm",
+ "thiserror",
+]
+
+[[package]]
 name = "plank-core"
 version = "0.1.0"
 dependencies = [
